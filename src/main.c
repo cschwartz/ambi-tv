@@ -28,6 +28,7 @@
 #include <getopt.h>
 #include <sys/time.h>
 #include <termios.h>
+#include <sys/inotify.h>
 
 #include "parse-conf.h"
 #include "registrations.h"
@@ -39,15 +40,18 @@
 #define LOGNAME      "main: "
 
 #define DEFAULT_CONFIG_PATH   "/etc/ambi-tv.conf"
+#define TRIGGER_PATH          "/tmp/ambi-tv/triggers/"
 #define BUTTON_MILLIS         250
 #define BUTTON_MILLIS_HYST    10
+
+#define INOTIFY_BUFFER_LENGTH (1024 * (sizeof(struct inotify_event) + 16))
 
 struct ambitv_main_conf {
    int            program_idx;
    int            gpio_idx;
    char*          config_path;
    
-   int            cur_prog, ambitv_on, gpio_fd;
+   int            cur_prog, ambitv_on, gpio_fd, inotify_fd;
    int            button_cnt;
    struct timeval last_button_press;
    volatile int   running;
@@ -142,8 +146,10 @@ ambitv_toggle_paused()
 static int
 ambitv_runloop()
 {
+   int i = 0;
    int ret = 0;
    unsigned char c = 0;
+   char inotify_buffer[INOTIFY_BUFFER_LENGTH];
    fd_set fds, ex_fds;
    struct timeval tv;
    
@@ -151,11 +157,13 @@ ambitv_runloop()
    FD_SET(STDIN_FILENO, &fds);
    if (conf.gpio_fd >= 0)
       FD_SET(conf.gpio_fd, &ex_fds);
+   if (conf.inotify_fd >= 0)
+     FD_SET(conf.inotify_fd, &fds);
    
    tv.tv_sec   = 0;
    tv.tv_usec  = 500000;
    
-   ret = select(MAX(STDIN_FILENO, conf.gpio_fd)+1, &fds, NULL, &ex_fds, &tv);
+   ret = select(MAX(STDIN_FILENO, MAX(conf.gpio_fd, conf.inotify_fd))+1, &fds, NULL, &ex_fds, &tv);
       
    if (ret < 0) {
       if (EINTR != errno && EWOULDBLOCK != errno) {
@@ -253,6 +261,52 @@ ambitv_runloop()
             conf.button_cnt = 0;
             memset(&conf.last_button_press, 0, sizeof(struct timeval));
          }
+      }
+   }
+
+   if(FD_ISSET(conf.inotify_fd, &fds)) {
+      ret = read(conf.inotify_fd, &inotify_buffer, INOTIFY_BUFFER_LENGTH);
+      
+      if (ret < 0) {
+         if (EINTR != errno && EWOULDBLOCK != errno) {
+            ambitv_log(ambitv_log_error, LOGNAME "error during read() on inotify: %d (%s)\n",
+               errno, strerror(errno));
+         } else
+            ret = 0;
+         
+         goto finishLoop;
+      } else if (0 == ret)
+         goto finishLoop;
+
+      while(i < ret) {
+        struct *inotify_event = (struct *inotify_event) &inotify_buffer[i];
+        char *known_file = NULL;
+        if(inotify_event->len > 0) {
+          if(inotify_event->mask & IN_CREATE) {
+            if(!(inotify_event->mask & IN_ISDIR)) {
+              if(strncmp(inotify_event->name, "next_mode", 9) == 0) {
+                known_file = "next_mode";
+                char *full_path = NULL;
+                if(asprintf(&full_path, "%s/%s", TRIGGER_PATH, known_file) < 0) {
+                  ambitv_log(ambitv_log_error, LOGNAME "error during asprintf(): %d (%s)\n",
+                     errno, strerror(errno));
+                  goto finishLoop;
+                }
+                if(remove(full_path)) {
+                  ambitv_log(ambitv_log_error, LOGNAME "error during remove(): %d (%s)\n",
+                     errno, strerror(errno));
+                  goto finishLoop;
+                }
+                free(full_path);
+
+                ret = ambitv_cycle_next_program();
+                if (ret < 0)
+                   goto finishLoop;
+              } 
+            }
+          }
+        }
+        i += sizeof(struct inotify_event) + inotify_event->len;
       }
    }
 
@@ -357,6 +411,7 @@ main(int argc, char** argv)
    struct ambitv_conf_parser* parser;
    struct termios tt;
    unsigned long tt_orig;
+   int watch_descriptor = -1;
    
    signal(SIGINT, ambitv_signal_handler);
    signal(SIGTERM, ambitv_signal_handler);
@@ -375,6 +430,7 @@ main(int argc, char** argv)
    conf.config_path     = DEFAULT_CONFIG_PATH;
    conf.ambitv_on       = 1;
    conf.gpio_fd         = -1;
+   conf.inotify_fd      = -1;
    conf.running         = 1;
    
    ret = ambitv_main_configure(argc, argv);
@@ -440,6 +496,17 @@ main(int argc, char** argv)
       ambitv_programs[conf.cur_prog]->name);
    
    fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
+
+   conf.inotify_fd = inotify_init();
+   if(conf.inotify_fd < 0) {
+    ambitv_log(ambitv_log_error, LOGNAME "failed to init inotify, aborting\n");
+    goto errReturn;
+   }
+   watch_descriptor = inotify_add_watch(conf.inotify_fd, TRIGGER_PATH, IN_CREATE);
+   if(watch_descriptor < 0) {
+    ambitv_log(ambitv_log_error, LOGNAME "failed to init add watch for '%s', aborting\n", TRIGGER_PATH);
+    goto errReturn;
+   }
    
    ambitv_log(ambitv_log_info,
       LOGNAME "************* start-up complete\n"
@@ -466,6 +533,12 @@ errReturn:
    
    if (conf.gpio_fd >= 0)
       ambitv_gpio_close_button_irq(conf.gpio_fd, conf.gpio_idx);
+
+   if (watch_descriptor >= 0)
+     inotify_rm_watch(watch_descriptor);
+   
+   if (conf.inotify_fd >= 0)
+     close(conf.inotify_fd);
    
    return ret;
 }
