@@ -44,7 +44,8 @@
 #define BUTTON_MILLIS         250
 #define BUTTON_MILLIS_HYST    10
 
-#define INOTIFY_BUFFER_LENGTH (1024 * (sizeof(struct inotify_event) + 16))
+#define EVENT_SIZE  ( sizeof (struct inotify_event) )
+#define INOTIFY_BUFFER_LENGTH (1024 * (EVENT_SIZE + 16))
 
 struct ambitv_main_conf {
    int            program_idx;
@@ -279,7 +280,7 @@ ambitv_runloop()
          goto finishLoop;
 
       while(i < ret) {
-        struct *inotify_event = (struct *inotify_event) &inotify_buffer[i];
+        struct inotify_event *inotify_event = (struct inotify_event *) &inotify_buffer[i];
         char *known_file = NULL;
         if(inotify_event->len > 0) {
           if(inotify_event->mask & IN_CREATE) {
@@ -306,8 +307,8 @@ ambitv_runloop()
             }
           }
         }
-        i += sizeof(struct inotify_event) + inotify_event->len;
-      }
+        i += EVENT_SIZE + inotify_event->len;
+      } 
    }
 
 finishLoop:
@@ -535,7 +536,7 @@ errReturn:
       ambitv_gpio_close_button_irq(conf.gpio_fd, conf.gpio_idx);
 
    if (watch_descriptor >= 0)
-     inotify_rm_watch(watch_descriptor);
+     inotify_rm_watch(conf.inotify_fd, watch_descriptor);
    
    if (conf.inotify_fd >= 0)
      close(conf.inotify_fd);
