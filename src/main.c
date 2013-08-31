@@ -17,6 +17,7 @@
 *  along with ambi-tv.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -40,7 +41,7 @@
 #define LOGNAME      "main: "
 
 #define DEFAULT_CONFIG_PATH   "/etc/ambi-tv.conf"
-#define TRIGGER_PATH          "/tmp/ambi-tv/triggers/"
+#define TRIGGER_PATH          "/var/ambi-tv/triggers/"
 #define BUTTON_MILLIS         250
 #define BUTTON_MILLIS_HYST    10
 
@@ -142,6 +143,29 @@ ambitv_toggle_paused()
       conf.ambitv_on ? "running" : "paused");
    
    return ret;
+}
+
+static int ambitv_delete_trigger(const char *trigger_file) {
+  char *full_path = NULL;
+  int ret = asprintf(&full_path, "%s/%s", TRIGGER_PATH, trigger_file);
+
+  if(ret < 0) {
+    ambitv_log(ambitv_log_error, LOGNAME "error during asprintf(): %d (%s)\n",
+       errno, strerror(errno));
+    goto errorState;
+  }
+
+  ret = remove(full_path);
+  if(ret < 0) {
+    ambitv_log(ambitv_log_error, LOGNAME "error during remove(): %d (%s)\n",
+       errno, strerror(errno));
+    goto errorState;
+  }
+  free(full_path);
+
+  return 0;
+errorState:
+  return ret;
 }
 
 static int
@@ -281,24 +305,38 @@ ambitv_runloop()
 
       while(i < ret) {
         struct inotify_event *inotify_event = (struct inotify_event *) &inotify_buffer[i];
-        char *known_file = NULL;
         if(inotify_event->len > 0) {
           if(inotify_event->mask & IN_CREATE) {
             if(!(inotify_event->mask & IN_ISDIR)) {
+              if(strncmp(inotify_event->name, "switch_mode", 11) == 0) {
+                int next_program = -1;
+                ret = sscanf(inotify_event->name, "switch_mode.%d", &next_program);
+                if(ret != 1) {
+                  ambitv_log(ambitv_log_error, LOGNAME "invalid filename %s\n",
+                     inotify_event->name);
+                  goto finishLoop;
+                }
+
+                ret = ambitv_delete_trigger(inotify_event->name);
+                if(ret< 0) {
+                  ambitv_log(ambitv_log_error, LOGNAME "could not remove trigger: %s\n",
+                     inotify_event->name);
+                  goto finishLoop;
+                }
+
+                conf.cur_prog = next_program % ambitv_num_programs; 
+
+                ret = ambitv_program_run(ambitv_programs[conf.cur_prog]);
+                if (ret < 0)
+                   goto finishLoop;
+              } 
               if(strncmp(inotify_event->name, "next_mode", 9) == 0) {
-                known_file = "next_mode";
-                char *full_path = NULL;
-                if(asprintf(&full_path, "%s/%s", TRIGGER_PATH, known_file) < 0) {
-                  ambitv_log(ambitv_log_error, LOGNAME "error during asprintf(): %d (%s)\n",
-                     errno, strerror(errno));
+                ret = ambitv_delete_trigger(inotify_event->name);
+                if(ret< 0) {
+                  ambitv_log(ambitv_log_error, LOGNAME "could not remove trigger: %s\n",
+                     inotify_event->name);
                   goto finishLoop;
                 }
-                if(remove(full_path)) {
-                  ambitv_log(ambitv_log_error, LOGNAME "error during remove(): %d (%s)\n",
-                     errno, strerror(errno));
-                  goto finishLoop;
-                }
-                free(full_path);
 
                 ret = ambitv_cycle_next_program();
                 if (ret < 0)
