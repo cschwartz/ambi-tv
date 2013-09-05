@@ -30,6 +30,7 @@
 #include <sys/time.h>
 #include <termios.h>
 #include <sys/inotify.h>
+#include <dirent.h>
 
 #include "parse-conf.h"
 #include "registrations.h"
@@ -342,6 +343,34 @@ ambitv_runloop()
                 if (ret < 0)
                    goto finishLoop;
               } 
+              if(strncmp(inotify_event->name, "stop", 5) == 0) {
+                ret = ambitv_delete_trigger(inotify_event->name);
+                if(ret< 0) {
+                  ambitv_log(ambitv_log_error, LOGNAME "could not remove trigger: %s\n",
+                     inotify_event->name);
+                  goto finishLoop;
+                }
+
+		if(conf.ambitv_on == 1)
+		  ret = ambitv_toggle_paused();
+
+                if (ret < 0)
+                   goto finishLoop;
+              }
+              if(strncmp(inotify_event->name, "start", 4) == 0) {
+                ret = ambitv_delete_trigger(inotify_event->name);
+                if(ret< 0) {
+                  ambitv_log(ambitv_log_error, LOGNAME "could not remove trigger: %s\n",
+                     inotify_event->name);
+                  goto finishLoop;
+                }
+
+		if(conf.ambitv_on == 0)
+		  ret = ambitv_toggle_paused();
+
+                if (ret < 0)
+                   goto finishLoop;
+              } 
             }
           }
         }
@@ -536,17 +565,23 @@ main(int argc, char** argv)
    
    fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
 
-   conf.inotify_fd = inotify_init();
-   if(conf.inotify_fd < 0) {
-    ambitv_log(ambitv_log_error, LOGNAME "failed to init inotify, aborting\n");
-    goto errReturn;
+   DIR *trigger_dir = opendir(TRIGGER_PATH);
+   if(trigger_dir) {
+     closedir(trigger_dir);
+     conf.inotify_fd = inotify_init();
+     if(conf.inotify_fd < 0) {
+      ambitv_log(ambitv_log_error, LOGNAME "failed to init inotify, aborting\n");
+      goto errReturn;
+     }
+     watch_descriptor = inotify_add_watch(conf.inotify_fd, TRIGGER_PATH, IN_CREATE);
+     if(watch_descriptor < 0) {
+      ambitv_log(ambitv_log_error, LOGNAME "failed to init add watch for '%s', aborting\n", TRIGGER_PATH);
+      goto errReturn;
+     }
+   } else {
+     ambitv_log(ambitv_log_info,
+         LOGNAME "'%s' not found. disabling file based triggers", TRIGGER_PATH);
    }
-   watch_descriptor = inotify_add_watch(conf.inotify_fd, TRIGGER_PATH, IN_CREATE);
-   if(watch_descriptor < 0) {
-    ambitv_log(ambitv_log_error, LOGNAME "failed to init add watch for '%s', aborting\n", TRIGGER_PATH);
-    goto errReturn;
-   }
-   
    ambitv_log(ambitv_log_info,
       LOGNAME "************* start-up complete\n"
       "\tpress <space> to cycle between programs.\n"
