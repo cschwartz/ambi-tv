@@ -17,6 +17,7 @@
 *  along with ambi-tv.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "util.h"
@@ -40,6 +41,35 @@ ambitv_util_append_ptr_to_list(void*** list_ptr, int idx, int* len_ptr, void* pt
    (*list_ptr)[idx] = ptr;
 
    return ++idx;
+}
+
+int ambitv_util_status_update(char *status_file, char *status_content)
+{
+  int ret = 0;
+  FILE *status_fid = NULL;
+  char *full_path = NULL;
+
+  ret = asprintf(&full_path, "%s/%s", STATUS_PATH, status_file);
+  if(ret < 0) {
+    goto errReturn;
+  }
+
+  status_fid = fopen(full_path, "w");
+  free(full_path);
+  full_path = NULL;
+
+  if(status_fid == 0) {
+     ret = -1;
+     goto errReturn;
+  }
+ 
+  fprintf(status_fid, "%s", status_content);
+
+  errReturn:
+    if(status_fid > 0)
+      fclose(status_fid);
+
+    return ret;
 }
 
 int

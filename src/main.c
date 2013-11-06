@@ -128,6 +128,11 @@ ambitv_toggle_paused()
    
    conf.ambitv_on = !conf.ambitv_on;
    
+   ret = ambitv_util_status_update("is_paused", conf.ambitv_on ? "false" : "true");
+   if(ret < 0) {
+     goto errReturn;
+   }
+
    if (conf.ambitv_on) {
       ret = ambitv_program_run(ambitv_programs[conf.cur_prog]);
       if (ret < 0)
@@ -143,6 +148,7 @@ ambitv_toggle_paused()
    ambitv_log(ambitv_log_info, LOGNAME "now: %s\n",
       conf.ambitv_on ? "running" : "paused");
    
+   errReturn:
    return ret;
 }
 

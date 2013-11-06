@@ -24,10 +24,15 @@
 #define MAX(x,y)              ((x) > (y)) ? (x) : (y)
 #define CONSTRAIN(a, l, r)    (MIN(MAX((l), (a)), (r)))
 
+#define STATUS_PATH "/var/ambi-tv/status"
+
 int
 ambitv_util_append_ptr_to_list(void*** list_ptr, int idx, int* len_ptr, void* ptr);
 
 int
 ambitv_parse_led_string(const char* str, int** out_ptr, int* out_len);
+
+int
+ambitv_util_status_update(char *status_file, char *status_content);
 
 #endif // __AMBITV_UTIL_H__

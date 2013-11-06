@@ -187,7 +187,10 @@ int
 ambitv_program_run(struct ambitv_program* program)
 {
    int i, ret = 0;
-   
+   ret = ambitv_util_status_update("current_program", program->name);
+   if(ret < 0)
+     goto errReturn;
+
    if (NULL != ambitv_current_program) {
       for (i=0; i<ambitv_current_program->num_components; i++) {
          if (!ambitv_program_contains_component(program, ambitv_current_program->components[i])) {
